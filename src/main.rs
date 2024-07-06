@@ -136,6 +136,7 @@ impl<'a> Scheduler<'a> {
     }
 
     fn schedule(&self) {
+        println!("Would have scheduled something here!");
         // grab all available tasks
         // check if we're supposed to schedule them yet by checking the time that we scheduled the last program.
         // if it's time to schedule one then check who the last winner was by checking the file where the current winner is output
