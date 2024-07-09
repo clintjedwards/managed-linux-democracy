@@ -1,0 +1,23 @@
+[package]
+name = "democracy-scheduler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+scx_rustland_core = "0.5.0"
+scx_utils = "0.8.1"
+plain = "0.2.3"
+clap = { version = "4.1", features = ["derive", "env", "unicode", "wrap_help"] }
+ctrlc = { version = "3.1", features = ["termination"] }
+fb_procfs = "0.7.0"
+libbpf-rs = "0.23.1"
+libc = "0.2.137"
+log = "0.4.17"
+ordered-float = "3.4.0"
+simplelog = "0.12.0"
+
+
+[build-dependencies]
+scx_utils = "0.8.1"
+scx_rustland_core = "0.5.0"
