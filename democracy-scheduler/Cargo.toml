@@ -15,7 +15,10 @@ libbpf-rs = "0.23.1"
 libc = "0.2.137"
 log = "0.4.17"
 ordered-float = "3.4.0"
-simplelog = "0.12.0"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter", "json"] }
+reqwest = { version = "0.12.5", features = ["json"] }
+serde = { version = "1.0.173", features = ["derive"] }
 
 
 [build-dependencies]

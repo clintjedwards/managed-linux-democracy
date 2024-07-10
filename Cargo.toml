@@ -1,5 +1,5 @@
 [workspace]
-members = ["democracy-scheduler", "ballet_box"]
+members = ["democracy-scheduler", "ballet_box", "thingdoer"]
 resolver = "2"
 
 [profile.dev]

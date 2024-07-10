@@ -80,6 +80,11 @@ struct VoteResponse {
     current_tally: Vec<(String, u64)>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct CurrentWinnerResponse {
+    winner: String,
+}
+
 #[tokio::main]
 async fn main() {
     let app_state = std::sync::Arc::new(AppContext::new());
@@ -96,6 +101,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/api/vote", post(vote_handler))
+        .route("/api/current_winner", get(current_winner_handler))
         .route(
             "/",
             get(|| async { static_handler(Path("".to_string())).await }),
@@ -141,6 +147,43 @@ pub async fn static_handler(Path(path): Path<String>) -> Result<Response<Body>, 
             .body(Body::from("<h1>404</h1><p>Not Found</p>"))
             .unwrap()),
     }
+}
+
+async fn current_winner_handler(
+    State(state): State<std::sync::Arc<AppContext>>,
+) -> Result<Json<CurrentWinnerResponse>, AppError> {
+    let mut winner = ("", 0);
+
+    if state.emacs_votes.load(std::sync::atomic::Ordering::Relaxed) > winner.1 {
+        winner = (
+            "emacs",
+            state.emacs_votes.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    if state
+        .vscode_votes
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > winner.1
+    {
+        winner = (
+            "vscode",
+            state
+                .vscode_votes
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    if state.vim_votes.load(std::sync::atomic::Ordering::Relaxed) > winner.1 {
+        winner = (
+            "vim",
+            state.vim_votes.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    Ok(Json(CurrentWinnerResponse {
+        winner: winner.0.into(),
+    }))
 }
 
 async fn vote_handler(

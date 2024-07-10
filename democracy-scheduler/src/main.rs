@@ -5,6 +5,7 @@ pub mod bpf_intf;
 mod bpf;
 use bpf::*;
 
+use libc::SCHED_FIFO;
 use scx_utils::Topology;
 use scx_utils::TopologyMap;
 use scx_utils::UserExitInfo;
@@ -25,10 +26,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use log::info;
-use log::warn;
+use serde::Deserialize;
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 const SCHEDULER_NAME: &str = "democracy";
+
+const SCHED_EXT: i32 = 7;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -78,15 +82,8 @@ impl TaskInfoMap {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Clone)]
-struct Task {
-    qtask: QueuedTask,    // queued task
-    vruntime: u64,        // total vruntime (that determines the order how tasks are dispatched)
-    is_interactive: bool, // task can preempt other tasks
-}
-
 struct TaskTree {
-    task_map: HashMap<i32, Task>, // Map from pid to task
+    task_map: HashMap<i32, u64>, // Map from pid to vruntime
 }
 
 // Main scheduler object
@@ -121,7 +118,7 @@ impl<'a> Scheduler<'a> {
             false, // fifo_sched: By default when there is low utilization the system will simply go into FIFO mode since that provides better performance. This turns that off since we want to control the scheduling.
             true, // debug: Simply prints all events that occurred to /sys/kernel/debug/tracing/trace_pipe
         )?;
-        info!("{} scheduler attached - {} CPUs", SCHEDULER_NAME, nr_cpus);
+        info!(name = SCHEDULER_NAME, cpus = nr_cpus, "scheduler attached");
 
         // Return scheduler object.
         Ok(Self { bpf, task_map })
@@ -135,8 +132,34 @@ impl<'a> Scheduler<'a> {
         ts.as_nanos() as u64
     }
 
-    fn schedule(&self) {
-        println!("Would have scheduled something here!");
+    fn schedule(&mut self) {
+        debug!("Scheduler invoked");
+
+        loop {
+            match self.bpf.dequeue_task() {
+                // We were able to get a new task to schedule.
+                Ok(Some(task)) => {
+                    // If the task is exiting the cpu will be < 0; We don't particularly care about this.
+                    if task.cpu < 0 {
+                        continue;
+                    }
+
+                    // Check which thing should be scheduled and then only schedule the pid that corresponds.
+                }
+
+                // The queue is empty.
+                Ok(None) => {
+                    break;
+                }
+
+                // Some error occurred.
+                Err(err) => {
+                    error!(err = %err, "Encountered error while draining tasks")
+                    // I have no idea if its safe to keep looping after this?
+                }
+            }
+        }
+
         // grab all available tasks
         // check if we're supposed to schedule them yet by checking the time that we scheduled the last program.
         // if it's time to schedule one then check who the last winner was by checking the file where the current winner is output
@@ -186,4 +209,73 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn init_logger() -> Result<()> {
+    let filter = EnvFilter::from_default_env()
+        // These directives filter out debug information that is too numerous and we generally don't need during
+        // development.
+        .add_directive("sqlx=off".parse().expect("Invalid directive"))
+        .add_directive("h2=off".parse().expect("Invalid directive"))
+        .add_directive("hyper=off".parse().expect("Invalid directive"))
+        .add_directive("rustls=off".parse().expect("Invalid directive"))
+        .add_directive("bollard=off".parse().expect("Invalid directive"))
+        .add_directive("reqwest=off".parse().expect("Invalid directive"))
+        .add_directive("tungstenite=off".parse().expect("Invalid directive"))
+        .add_directive(LevelFilter::DEBUG.into()); // Accept debug level logs and above for everything else
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .compact()
+        .init();
+
+    Ok(())
+}
+
+// Launches a process and returns the PID.
+fn launch_process(bin_name: &str) -> u32 {
+    // Launch the process
+    let mut command = std::process::Command::new(bin_name);
+
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+            let pid = libc::getpid();
+            let param = libc::sched_param { sched_priority: 10 };
+            if libc::sched_setscheduler(pid, SCHED_EXT, &param) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = command
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to start process");
+
+    // Get the PID of the launched process
+    let pid = child.id();
+    info!(pid = pid, bin_name = bin_name, "Launched process");
+
+    pid
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentWinnerResponse {
+    winner: String,
+}
+
+async fn get_current_winner() -> Result<String> {
+    let url = "http://localhost:8080";
+
+    let winner = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "scheduler")
+        .send()
+        .await?;
+
+    let winner: CurrentWinnerResponse = winner.json().await?;
+
+    Ok(winner.winner)
 }
