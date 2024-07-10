@@ -1,23 +1,31 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use axum::{
-    extract::{Extension, Json, State},
-    response::{Html, IntoResponse},
+    body::Body,
+    extract::{ConnectInfo, Json, Path, State},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
+use dashmap::DashMap;
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::{
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     str::FromStr,
     sync::atomic::AtomicU64,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
+#[derive(RustEmbed)]
+#[folder = "public"]
+pub struct EmbeddedFrontendFS;
+
 struct AppContext {
     vim_votes: AtomicU64,
     emacs_votes: AtomicU64,
     vscode_votes: AtomicU64,
+    rate_limiter: DashMap<IpAddr, u64>,
 }
 
 impl AppContext {
@@ -26,10 +34,12 @@ impl AppContext {
             vim_votes: AtomicU64::new(0),
             emacs_votes: AtomicU64::new(0),
             vscode_votes: AtomicU64::new(0),
+            rate_limiter: DashMap::new(),
         }
     }
 }
 
+#[derive(Debug)]
 enum PossibleVote {
     Vim,
     Emacs,
@@ -37,7 +47,7 @@ enum PossibleVote {
 }
 
 #[derive(Debug)]
-struct AppError {
+pub struct AppError {
     status: axum::http::StatusCode,
     message: String,
 }
@@ -85,24 +95,82 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/", get(static_handler))
-        .route("/vote", post(vote_handler))
+        .route("/api/vote", post(vote_handler))
+        .route(
+            "/",
+            get(|| async { static_handler(Path("".to_string())).await }),
+        )
+        .route("/*path", get(static_handler))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(bind_address).await.unwrap();
 
     info!(addr = %listener.local_addr().unwrap(), "started server");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
-async fn static_handler() -> Html<&'static str> {
-    Html("<h1>Hello, World!</h1>")
+pub async fn static_handler(Path(path): Path<String>) -> Result<Response<Body>, AppError> {
+    let path = if path.is_empty() {
+        "index.html".to_string()
+    } else {
+        path
+    };
+
+    match EmbeddedFrontendFS::get(&path) {
+        Some(content) => {
+            let ext = std::path::Path::new(&path)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("txt");
+
+            let mime_type = mime_guess::from_ext(ext).first_or_text_plain();
+
+            Ok(Response::builder()
+                .header(axum::http::header::CONTENT_TYPE, mime_type.as_ref())
+                .body(Body::from(content.data.clone()))
+                .unwrap())
+        }
+        None => Ok(Response::builder()
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(Body::from("<h1>404</h1><p>Not Found</p>"))
+            .unwrap()),
+    }
 }
 
 async fn vote_handler(
     State(state): State<std::sync::Arc<AppContext>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(input): Json<VoteRequest>,
 ) -> Result<Json<VoteResponse>, AppError> {
+    let now = chrono::Utc::now();
+    let epoch_seconds = now.timestamp() as u64;
+
+    let matched_ip = state.rate_limiter.get(&addr.ip());
+
+    if let Some(matched_ip) = matched_ip {
+        let last_request_time = *matched_ip.value();
+
+        if epoch_seconds - last_request_time < 1 {
+            return Err(AppError {
+                status: axum::http::StatusCode::TOO_MANY_REQUESTS,
+                message: "Okay, listen. Democracy has limits. You're doing that too much; try again in a second."
+                    .into(),
+            });
+        }
+    }
+
+    state
+        .rate_limiter
+        .entry(addr.ip())
+        .and_modify(|seconds| *seconds = epoch_seconds)
+        .or_insert(epoch_seconds);
+
     let vote = match check_vote(&input.vote) {
         Ok(vote) => vote,
         Err(_) => {
@@ -143,6 +211,8 @@ async fn vote_handler(
                 .load(std::sync::atomic::Ordering::Relaxed),
         ),
     ];
+
+    info!(choice = ?vote, "vote cast!");
 
     Ok(Json(VoteResponse {
         current_tally: response,
