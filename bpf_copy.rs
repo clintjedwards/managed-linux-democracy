@@ -21,10 +21,8 @@ use scx_utils::compat;
 use scx_utils::init_libbpf_logging;
 use scx_utils::scx_ops_attach;
 use scx_utils::scx_ops_load;
-use scx_utils::scx_ops_open;
 use scx_utils::uei_exited;
 use scx_utils::uei_report;
-use scx_utils::UserExitInfo;
 
 use scx_rustland_core::ALLOCATOR;
 
@@ -191,7 +189,7 @@ impl<'cb> BpfScheduler<'cb> {
         // Open the BPF prog first for verification.
         let skel_builder = BpfSkelBuilder::default();
         init_libbpf_logging(None);
-        let mut skel = scx_ops_open!(skel_builder, rustland)?;
+        let mut skel = skel_builder.open().context("Failed to open BPF program")?;
 
         // Lock all the memory to prevent page faults that could trigger potential deadlocks during
         // scheduling.
@@ -240,20 +238,21 @@ impl<'cb> BpfScheduler<'cb> {
 
         // Set scheduler options (defined in the BPF part).
         if partial {
-            skel.struct_ops.rustland_mut().flags |= *compat::SCX_OPS_SWITCH_PARTIAL;
+            skel.struct_ops.democracy_mut().flags |= *compat::SCX_OPS_SWITCH_PARTIAL;
         }
-        skel.struct_ops.rustland_mut().exit_dump_len = exit_dump_len;
+        skel.struct_ops.democracy_mut().exit_dump_len = exit_dump_len;
 
         skel.bss_mut().usersched_pid = std::process::id();
         skel.rodata_mut().slice_ns = slice_us * 1000;
+        skel.rodata_mut().switch_partial = partial;
         skel.rodata_mut().debug = debug;
         skel.rodata_mut().full_user = full_user;
         skel.rodata_mut().low_power = low_power;
         skel.rodata_mut().fifo_sched = fifo_sched;
 
         // Attach BPF scheduler.
-        let mut skel = scx_ops_load!(skel, rustland, uei)?;
-        let struct_ops = Some(scx_ops_attach!(skel, rustland)?);
+        let mut skel = scx_ops_load!(skel, democracy, uei)?;
+        let struct_ops = Some(scx_ops_attach!(skel, democracy)?);
 
         // Build the ring buffer of queued tasks.
         let maps = skel.maps();
@@ -449,8 +448,7 @@ impl<'cb> BpfScheduler<'cb> {
     // Called on exit to shutdown and report exit message from the BPF part.
     pub fn shutdown_and_report(&mut self) -> Result<()> {
         self.struct_ops.take();
-        Ok(())
-        // uei_report!(&self.skel, uei)
+        uei_report!(&self.skel, uei)
     }
 }
 
