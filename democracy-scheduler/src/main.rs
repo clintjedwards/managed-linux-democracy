@@ -195,7 +195,8 @@ impl<'a> Scheduler<'a> {
             self.schedule();
         }
 
-        self.bpf.shutdown_and_report()
+        Ok(())
+        //self.bpf.shutdown_and_report()
     }
 }
 
