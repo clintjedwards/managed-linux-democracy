@@ -68,7 +68,6 @@ struct Scheduler<'a> {
     bpf: BpfScheduler<'a>,                // BPF connector
     task_map: HashMap<u32, u64>,          // pid to vruntime
     owner_map: HashMap<Competitors, u32>, // pid to binary owner
-    last_scheduled: u64,
 }
 
 impl<'a> Scheduler<'a> {
@@ -111,20 +110,11 @@ impl<'a> Scheduler<'a> {
             bpf,
             task_map,
             owner_map,
-            last_scheduled: now(),
         })
     }
 
     fn schedule(&mut self) {
-        debug!("Scheduler invoked");
-
         loop {
-            let time_now = now();
-            let next_scheduled_time = self.last_scheduled + 1000000000;
-            if time_now < next_scheduled_time {
-                break;
-            }
-
             debug!("Scheduler has passed next_scheduled_time; attempting to schedule a task");
 
             match self.bpf.dequeue_task() {
@@ -227,8 +217,19 @@ fn main() -> Result<()> {
     })
     .context("Error setting Ctrl-C handler")?;
 
+    let mut last_scheduled = 0;
+
     loop {
         let mut sched = Scheduler::init()?;
+
+        let time_now = now();
+        let next_scheduled_time = last_scheduled + 1000000000;
+        if time_now < next_scheduled_time {
+            debug!("Not time to schedule anything yet");
+            break;
+        }
+        last_scheduled = now();
+
         // Start the scheduler.
         if let Err(e) = sched.run(shutdown.clone()) {
             eprint!("scheduler has shutdown; {:#?}", e);
