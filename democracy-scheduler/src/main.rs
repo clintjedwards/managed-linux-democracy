@@ -5,7 +5,6 @@ pub mod bpf_intf;
 mod bpf;
 use bpf::*;
 
-use libc::SCHED_FIFO;
 use scx_utils::Topology;
 use scx_utils::TopologyMap;
 use scx_utils::UserExitInfo;
@@ -24,6 +23,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use serde::Deserialize;
@@ -32,9 +32,23 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 const SCHEDULER_NAME: &str = "democracy";
 
-const SCHED_EXT: i32 = 7;
-
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+enum Competitors {
+    Summer1,
+    Summer2,
+}
+
+impl Competitors {
+    fn from_str(input: &str) -> Result<Competitors> {
+        match input.to_lowercase().as_str() {
+            "summer1" => Ok(Competitors::Summer1),
+            "summer2" => Ok(Competitors::Summer2),
+            _ => bail!("Unknown competitor"),
+        }
+    }
+}
 
 // We could schedule this as a game which ever program gets to run the requisite amount of time is rewarded with the win
 // The votes are submitted by rank choice by http/json
@@ -49,47 +63,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 // and print the winner via some other way(not sure on this yet) to make the scheduler spit out the winner in another way.
 // We should also make a live graph of who is winning.
 
-// Basic item stored in the task information map.
-#[derive(Debug)]
-struct TaskInfo {
-    sum_exec_runtime: u64, // total cpu time used by the task
-    vruntime: u64,         // total vruntime of the task
-    avg_nvcsw: u64,        // average of voluntary context switches
-    nvcsw: u64,            // total amount of voluntary context switches
-    nvcsw_ts: u64,         // timestamp of the previous nvcsw update
-}
-
-// Task information map: store total execution time and vruntime of each task in the system.
-//
-// TaskInfo objects are stored in the HashMap and they are indexed by pid.
-//
-// Entries are removed when the corresponding task exits.
-//
-// This information is fetched from the BPF section (through the .exit_task() callback) and
-// received by the user-space scheduler via self.bpf.dequeue_task(): a task with a negative .cpu
-// value represents an exiting task, so in this case we can free the corresponding entry in
-// TaskInfoMap (see also Scheduler::drain_queued_tasks()).
-struct TaskInfoMap {
-    tasks: HashMap<i32, TaskInfo>,
-}
-
-// TaskInfoMap implementation: provide methods to get items and update items by pid.
-impl TaskInfoMap {
-    fn new() -> Self {
-        TaskInfoMap {
-            tasks: HashMap::new(),
-        }
-    }
-}
-
-struct TaskTree {
-    task_map: HashMap<i32, u64>, // Map from pid to vruntime
-}
-
 // Main scheduler object
 struct Scheduler<'a> {
-    bpf: BpfScheduler<'a>, // BPF connector
-    task_map: TaskInfoMap,
+    bpf: BpfScheduler<'a>,                // BPF connector
+    task_map: HashMap<u32, u64>,          // pid to vruntime
+    owner_map: HashMap<Competitors, u32>, // pid to binary owner
+    last_scheduled: u64,
 }
 
 impl<'a> Scheduler<'a> {
@@ -98,7 +77,8 @@ impl<'a> Scheduler<'a> {
         let topo = Topology::new().expect("Failed to build host topology");
 
         // Scheduler task map to store tasks information.
-        let task_map = TaskInfoMap::new();
+        let mut task_map = HashMap::new();
+        let mut owner_map = HashMap::new();
 
         let nr_cpus = topo.nr_cpus_possible();
 
@@ -106,12 +86,10 @@ impl<'a> Scheduler<'a> {
         // can recieve and perform various scheudling events. Let's explain some of the parameters it takes in.
         // You can find a better explaination of these variables here: https://github.com/sched-ext/scx/blob/main/scheds/rust/scx_rustland/src/main.rs#L85-L161
 
-        //TODO(turn partial back on when we have actual tasks to schedule)
-
         let bpf = BpfScheduler::init(
             1000000, // slice_us: How much time the task should be given to run in micro-seconds. 1000000 is 1s.
             topo.nr_cpus_possible() as i32, // nr_cpus_online: Tells the scheduler how many CPUs they are and how many
-            false, // partial: Setting this to false tells BPF that we want to be responsible for how ALL tasks get scheudled, setting this to true says "only tasks that specifically set their scheduler to SCHED_EXT"
+            true, // partial: Setting this to false tells BPF that we want to be responsible for how ALL tasks get scheudled, setting this to true says "only tasks that specifically set their scheduler to SCHED_EXT"
             0, // exit_dump_len: Exit debug dump buffer length. 0 indicates default. I'll be honest i'm not exactly sure what this means, but if I had to guess I assume that this is the number in bytes of hte debug buffer which will be printed in debug mode when the scheudler is exited.
             true, // full_user: Setting this to true tells BPF that we want all scheduler decisions to be made in user spaces, instead of it trying to optimize some of the decision making in kernel space
             false, // low_power: This enables a bunch of settings that cause the CPU to operate in a way that saves power.
@@ -120,22 +98,35 @@ impl<'a> Scheduler<'a> {
         )?;
         info!(name = SCHEDULER_NAME, cpus = nr_cpus, "scheduler attached");
 
-        // Return scheduler object.
-        Ok(Self { bpf, task_map })
-    }
+        let summer_1_pid = launch_process("thingdoer");
+        let summer_2_pid = launch_process("thingdoer");
 
-    // Return current timestamp in ns.
-    fn now() -> u64 {
-        let ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        ts.as_nanos() as u64
+        task_map.insert(summer_1_pid, 0);
+        task_map.insert(summer_2_pid, 0);
+
+        owner_map.insert(Competitors::Summer1, summer_1_pid);
+        owner_map.insert(Competitors::Summer2, summer_2_pid);
+
+        Ok(Self {
+            bpf,
+            task_map,
+            owner_map,
+            last_scheduled: now(),
+        })
     }
 
     fn schedule(&mut self) {
         debug!("Scheduler invoked");
 
         loop {
+            let time_now = now();
+            let next_scheduled_time = self.last_scheduled + 1000000000;
+            if time_now < next_scheduled_time {
+                break;
+            }
+
+            debug!("Scheduler has passed next_scheduled_time; attempting to schedule a task");
+
             match self.bpf.dequeue_task() {
                 // We were able to get a new task to schedule.
                 Ok(Some(task)) => {
@@ -144,7 +135,50 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    // Check which thing should be scheduled and then only schedule the pid that corresponds.
+                    // We should probably do this outside of the scheduler loop.
+                    // But we'll optimize later.
+                    let winner = match get_current_winner() {
+                        Ok(winner) => winner,
+                        Err(e) => {
+                            debug!(err = %e, "There was no winner when we checked");
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
+                    };
+
+                    let winner_pid = self.owner_map.get(&winner).unwrap();
+
+                    if task.pid as u32 != *winner_pid {
+                        debug!(
+                            "We found a pid {} that did not match the winner pid {}",
+                            task.pid, winner_pid
+                        );
+                        continue;
+                    }
+
+                    // If we're continuing here its because we have the correct task
+                    // that we want to schedule.
+
+                    let winner_current_runtime = self.task_map.get(&(task.pid as u32)).unwrap();
+
+                    let mut dispatched_task = DispatchedTask::new(&task);
+                    dispatched_task.set_slice_ns(1000000000);
+
+                    match self.bpf.dispatch_task(&dispatched_task) {
+                        Ok(_) => {
+                            debug!(pid = task.pid, owner = ?winner, "Task successfully scheduled");
+                        }
+                        Err(e) => {
+                            error!(pid = task.pid, owner = ?winner, error = %e, "Could not schedule task");
+                            break;
+                            // If there is an error here in a real scheudler we would attempt to schedule
+                            // the task again, but here we just error and continue.
+                        }
+                    }
+
+                    self.task_map
+                        .insert(task.pid as u32, winner_current_runtime + 1000000000);
+                    break; // We scheudled the task that we wanted to we don't have to care anymore.
                 }
 
                 // The queue is empty.
@@ -159,14 +193,6 @@ impl<'a> Scheduler<'a> {
                 }
             }
         }
-
-        // grab all available tasks
-        // check if we're supposed to schedule them yet by checking the time that we scheduled the last program.
-        // if it's time to schedule one then check who the last winner was by checking the file where the current winner is output
-        // The winner will be updated second by second and the schedule will check who the winner is on any given second.
-        // When the winner if found then we can schedule ONLY that task and update it's vruntime.
-        // When we update the vruntime for a specific task then we write the current stats to a file that the frontend can handle
-        // We then just keep repeating the process.
 
         // Yield to avoid using too much CPU form the scheduler itself.
         thread::yield_now();
@@ -190,7 +216,9 @@ impl<'a> Drop for Scheduler<'a> {
 }
 
 fn main() -> Result<()> {
-    println!("Managed Democracy scheduler is starting...");
+    init_logger().unwrap();
+
+    info!("Managed Democracy scheduler is starting...");
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
@@ -238,17 +266,6 @@ fn launch_process(bin_name: &str) -> u32 {
     // Launch the process
     let mut command = std::process::Command::new(bin_name);
 
-    unsafe {
-        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
-            let pid = libc::getpid();
-            let param = libc::sched_param { sched_priority: 10 };
-            if libc::sched_setscheduler(pid, SCHED_EXT, &param) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
     let child = command
         .stdout(std::process::Stdio::null())
         .spawn()
@@ -266,16 +283,23 @@ struct CurrentWinnerResponse {
     winner: String,
 }
 
-async fn get_current_winner() -> Result<String> {
+// Return current timestamp in ns.
+fn now() -> u64 {
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    ts.as_nanos() as u64
+}
+
+fn get_current_winner() -> Result<Competitors> {
     let url = "http://localhost:8080";
 
-    let winner = reqwest::Client::new()
+    let winner = reqwest::blocking::Client::new()
         .get(url)
         .header("User-Agent", "scheduler")
-        .send()
-        .await?;
+        .send()?;
 
-    let winner: CurrentWinnerResponse = winner.json().await?;
+    let winner: CurrentWinnerResponse = winner.json()?;
 
-    Ok(winner.winner)
+    Competitors::from_str(&winner.winner)
 }

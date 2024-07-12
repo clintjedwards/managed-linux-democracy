@@ -22,18 +22,16 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 pub struct EmbeddedFrontendFS;
 
 struct AppContext {
-    vim_votes: AtomicU64,
-    emacs_votes: AtomicU64,
-    vscode_votes: AtomicU64,
+    summer1_votes: AtomicU64,
+    summer2_votes: AtomicU64,
     rate_limiter: DashMap<IpAddr, u64>,
 }
 
 impl AppContext {
     fn new() -> Self {
         Self {
-            vim_votes: AtomicU64::new(0),
-            emacs_votes: AtomicU64::new(0),
-            vscode_votes: AtomicU64::new(0),
+            summer1_votes: AtomicU64::new(0),
+            summer2_votes: AtomicU64::new(0),
             rate_limiter: DashMap::new(),
         }
     }
@@ -41,9 +39,8 @@ impl AppContext {
 
 #[derive(Debug)]
 enum PossibleVote {
-    Vim,
-    Emacs,
-    Vscode,
+    Summer1,
+    Summer2,
 }
 
 #[derive(Debug)]
@@ -63,9 +60,8 @@ fn check_vote(user_vote: &str) -> Result<PossibleVote> {
     let user_vote = user_vote.to_lowercase();
 
     match user_vote.as_str() {
-        "vim" => Ok(PossibleVote::Vim),
-        "emacs" => Ok(PossibleVote::Emacs),
-        "vscode" => Ok(PossibleVote::Vscode),
+        "summer1" => Ok(PossibleVote::Summer1),
+        "summer2" => Ok(PossibleVote::Summer2),
         _ => bail!("Not a valid vote"),
     }
 }
@@ -154,30 +150,29 @@ async fn current_winner_handler(
 ) -> Result<Json<CurrentWinnerResponse>, AppError> {
     let mut winner = ("", 0);
 
-    if state.emacs_votes.load(std::sync::atomic::Ordering::Relaxed) > winner.1 {
-        winner = (
-            "emacs",
-            state.emacs_votes.load(std::sync::atomic::Ordering::Relaxed),
-        )
-    }
-
     if state
-        .vscode_votes
+        .summer1_votes
         .load(std::sync::atomic::Ordering::Relaxed)
         > winner.1
     {
         winner = (
-            "vscode",
+            "summer1",
             state
-                .vscode_votes
+                .summer1_votes
                 .load(std::sync::atomic::Ordering::Relaxed),
         )
     }
 
-    if state.vim_votes.load(std::sync::atomic::Ordering::Relaxed) > winner.1 {
+    if state
+        .summer2_votes
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > winner.1
+    {
         winner = (
-            "vim",
-            state.vim_votes.load(std::sync::atomic::Ordering::Relaxed),
+            "summer2",
+            state
+                .summer2_votes
+                .load(std::sync::atomic::Ordering::Relaxed),
         )
     }
 
@@ -227,30 +222,25 @@ async fn vote_handler(
     };
 
     match vote {
-        PossibleVote::Vim => state
-            .vim_votes
+        PossibleVote::Summer1 => state
+            .summer1_votes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        PossibleVote::Emacs => state
-            .emacs_votes
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        PossibleVote::Vscode => state
-            .vscode_votes
+        PossibleVote::Summer2 => state
+            .summer2_votes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     };
 
     let response = vec![
         (
-            "vim_votes".into(),
-            state.vim_votes.load(std::sync::atomic::Ordering::Relaxed),
-        ),
-        (
-            "emacs_votes".into(),
-            state.emacs_votes.load(std::sync::atomic::Ordering::Relaxed),
-        ),
-        (
-            "vscode_votes".into(),
+            "summer1_votes".into(),
             state
-                .vscode_votes
+                .summer1_votes
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ),
+        (
+            "summer2_votes".into(),
+            state
+                .summer2_votes
                 .load(std::sync::atomic::Ordering::Relaxed),
         ),
     ];
