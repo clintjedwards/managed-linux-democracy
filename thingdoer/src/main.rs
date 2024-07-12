@@ -12,7 +12,7 @@ fn fibonacci(n: u64) -> u64 {
 fn main() {
     unsafe {
         let pid = libc::getpid();
-        let param = libc::sched_param { sched_priority: 10 };
+        let param = libc::sched_param { sched_priority: 0 };
         if libc::sched_setscheduler(pid, SCHED_EXT, &param) != 0 {
             panic!("{:#?}", std::io::Error::last_os_error());
         }

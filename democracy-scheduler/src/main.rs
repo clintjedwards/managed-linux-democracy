@@ -250,7 +250,7 @@ fn init_logger() -> Result<()> {
         .add_directive("bollard=off".parse().expect("Invalid directive"))
         .add_directive("reqwest=off".parse().expect("Invalid directive"))
         .add_directive("tungstenite=off".parse().expect("Invalid directive"))
-        .add_directive("libbpf=off".parse().expect("Invalid directive"))
+        .add_directive("scx_utils=off".parse().expect("Invalid directive"))
         .add_directive(LevelFilter::DEBUG.into()); // Accept debug level logs and above for everything else
 
     tracing_subscriber::fmt()
