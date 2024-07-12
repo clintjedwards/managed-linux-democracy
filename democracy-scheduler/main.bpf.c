@@ -1,6 +1,6 @@
 /* Copyright (c) Andrea Righi <andrea.righi@canonical.com> */
 /*
- * scx_rustland_core: BPF backend for schedulers running in user-space.
+ * scx_democracy_core: BPF backend for schedulers running in user-space.
  *
  * This BPF backend implements the low level sched-ext functionalities for a
  * user-space counterpart, that implements the actual scheduling policy.
@@ -473,7 +473,7 @@ static void dispatch_user_scheduler(void)
  * Decision made in this function is not final. The user-space scheduler may
  * decide to move the task to a different CPU later, if needed.
  */
-s32 BPF_STRUCT_OPS(rustland_select_cpu, struct task_struct *p, s32 prev_cpu,
+s32 BPF_STRUCT_OPS(democracy_select_cpu, struct task_struct *p, s32 prev_cpu,
 		   u64 wake_flags)
 {
 	struct task_ctx *tctx;
@@ -575,7 +575,7 @@ static void sched_congested(struct task_struct *p)
  * user-space scheduler is not required, or enqueue it to be processed by the
  * scheduler.
  */
-void BPF_STRUCT_OPS(rustland_enqueue, struct task_struct *p, u64 enq_flags)
+void BPF_STRUCT_OPS(democracy_enqueue, struct task_struct *p, u64 enq_flags)
 {
 	struct queued_task_ctx *task;
 
@@ -693,7 +693,7 @@ static long handle_dispatched_task(struct bpf_dynptr *dynptr, void *context)
  * so (usually if other CPUs are idle we may want to send more tasks to their
  * local DSQ to optimize the scheduling pipeline).
  */
-void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
+void BPF_STRUCT_OPS(democracy_dispatch, s32 cpu, struct task_struct *prev)
 {
 	/*
 	 * Check if the user-space scheduler needs to run, and in that case try
@@ -725,7 +725,7 @@ void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
 /*
  * Task @p starts on its selected CPU (update CPU ownership map).
  */
-void BPF_STRUCT_OPS(rustland_running, struct task_struct *p)
+void BPF_STRUCT_OPS(democracy_running, struct task_struct *p)
 {
 	s32 cpu = scx_bpf_task_cpu(p);
 
@@ -743,7 +743,7 @@ void BPF_STRUCT_OPS(rustland_running, struct task_struct *p)
 /*
  * Task @p stops running on its associated CPU (update CPU ownership map).
  */
-void BPF_STRUCT_OPS(rustland_stopping, struct task_struct *p, bool runnable)
+void BPF_STRUCT_OPS(democracy_stopping, struct task_struct *p, bool runnable)
 {
 	s32 cpu = scx_bpf_task_cpu(p);
 
@@ -766,7 +766,7 @@ void BPF_STRUCT_OPS(rustland_stopping, struct task_struct *p, bool runnable)
 /*
  * A CPU is about to change its idle state.
  */
-void BPF_STRUCT_OPS(rustland_update_idle, s32 cpu, bool idle)
+void BPF_STRUCT_OPS(democracy_update_idle, s32 cpu, bool idle)
 {
 	/*
 	 * Don't do anything if we exit from and idle state, a CPU owner will
@@ -792,7 +792,7 @@ void BPF_STRUCT_OPS(rustland_update_idle, s32 cpu, bool idle)
 /*
  * Task @p changes cpumask: update its local cpumask generation counter.
  */
-void BPF_STRUCT_OPS(rustland_set_cpumask, struct task_struct *p,
+void BPF_STRUCT_OPS(democracy_set_cpumask, struct task_struct *p,
 		    const struct cpumask *cpumask)
 {
 	struct task_ctx *tctx;
@@ -807,7 +807,7 @@ void BPF_STRUCT_OPS(rustland_set_cpumask, struct task_struct *p,
  * A CPU is taken away from the scheduler, preempting the current task by
  * another one running in a higher priority sched_class.
  */
-void BPF_STRUCT_OPS(rustland_cpu_release, s32 cpu,
+void BPF_STRUCT_OPS(democracy_cpu_release, s32 cpu,
 				struct scx_cpu_release_args *args)
 {
 	struct task_struct *p = args->task;
@@ -826,7 +826,7 @@ void BPF_STRUCT_OPS(rustland_cpu_release, s32 cpu,
  * Allocate and initialize all the internal structures for the task (this
  * function is allowed to block, so it can be used to preallocate memory).
  */
-s32 BPF_STRUCT_OPS(rustland_init_task, struct task_struct *p,
+s32 BPF_STRUCT_OPS(democracy_init_task, struct task_struct *p,
 		   struct scx_init_task_args *args)
 {
 	/* Allocate task's local storage */
@@ -843,7 +843,7 @@ s32 BPF_STRUCT_OPS(rustland_init_task, struct task_struct *p,
  * Notify the user-space scheduler that we can free up all the allocated
  * resources associated to this task.
  */
-void BPF_STRUCT_OPS(rustland_exit_task, struct task_struct *p,
+void BPF_STRUCT_OPS(democracy_exit_task, struct task_struct *p,
 		    struct scx_exit_task_args *args)
 {
 	struct queued_task_ctx *task;
@@ -995,14 +995,14 @@ static int dsq_init(void)
 /*
  * Initialize the scheduling class.
  */
-s32 BPF_STRUCT_OPS_SLEEPABLE(rustland_init)
+s32 BPF_STRUCT_OPS_SLEEPABLE(democracy_init)
 {
 	int err;
 
 	/* Compile-time checks */
 	BUILD_BUG_ON((MAX_CPUS % 2));
 
-	/* Initialize rustland core */
+	/* Initialize democracy core */
 	err = dsq_init();
 	if (err)
 		return err;
@@ -1018,7 +1018,7 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(rustland_init)
 /*
  * Unregister the scheduling class.
  */
-void BPF_STRUCT_OPS(rustland_exit, struct scx_exit_info *ei)
+void BPF_STRUCT_OPS(democracy_exit, struct scx_exit_info *ei)
 {
 	UEI_RECORD(uei, ei);
 }
@@ -1026,19 +1026,19 @@ void BPF_STRUCT_OPS(rustland_exit, struct scx_exit_info *ei)
 /*
  * Scheduling class declaration.
  */
-SCX_OPS_DEFINE(rustland,
-	       .select_cpu		= (void *)rustland_select_cpu,
-	       .enqueue			= (void *)rustland_enqueue,
-	       .dispatch		= (void *)rustland_dispatch,
-	       .running			= (void *)rustland_running,
-	       .stopping		= (void *)rustland_stopping,
-	       .update_idle		= (void *)rustland_update_idle,
-	       .set_cpumask		= (void *)rustland_set_cpumask,
-	       .cpu_release		= (void *)rustland_cpu_release,
-	       .init_task		= (void *)rustland_init_task,
-	       .exit_task		= (void *)rustland_exit_task,
-	       .init			= (void *)rustland_init,
-	       .exit			= (void *)rustland_exit,
+SCX_OPS_DEFINE(democracy,
+	       .select_cpu		= (void *)democracy_select_cpu,
+	       .enqueue			= (void *)democracy_enqueue,
+	       .dispatch		= (void *)democracy_dispatch,
+	       .running			= (void *)democracy_running,
+	       .stopping		= (void *)democracy_stopping,
+	       .update_idle		= (void *)democracy_update_idle,
+	       .set_cpumask		= (void *)democracy_set_cpumask,
+	       .cpu_release		= (void *)democracy_cpu_release,
+	       .init_task		= (void *)democracy_init_task,
+	       .exit_task		= (void *)democracy_exit_task,
+	       .init			= (void *)democracy_init,
+	       .exit			= (void *)democracy_exit,
 	       .flags			= SCX_OPS_ENQ_LAST | SCX_OPS_KEEP_BUILTIN_IDLE,
 	       .timeout_ms		= 500000,
 	       .dispatch_max_batch	= MAX_DISPATCH_SLOT,
