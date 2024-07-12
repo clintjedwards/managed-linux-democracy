@@ -238,9 +238,9 @@ impl<'cb> BpfScheduler<'cb> {
 
         // Set scheduler options (defined in the BPF part).
         if partial {
-            skel.struct_ops.rustland_mut().flags |= *compat::SCX_OPS_SWITCH_PARTIAL;
+            skel.struct_ops.democracy_mut().flags |= *compat::SCX_OPS_SWITCH_PARTIAL;
         }
-        skel.struct_ops.rustland_mut().exit_dump_len = exit_dump_len;
+        skel.struct_ops.democracy_mut().exit_dump_len = exit_dump_len;
 
         skel.bss_mut().usersched_pid = std::process::id();
         skel.rodata_mut().slice_ns = slice_us * 1000;
@@ -251,8 +251,8 @@ impl<'cb> BpfScheduler<'cb> {
         skel.rodata_mut().fifo_sched = fifo_sched;
 
         // Attach BPF scheduler.
-        let mut skel = scx_ops_load!(skel, rustland, uei)?;
-        let struct_ops = Some(scx_ops_attach!(skel, rustland)?);
+        let mut skel = scx_ops_load!(skel, democracy, uei)?;
+        let struct_ops = Some(scx_ops_attach!(skel, democracy)?);
 
         // Build the ring buffer of queued tasks.
         let maps = skel.maps();
