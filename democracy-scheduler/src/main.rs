@@ -95,6 +95,7 @@ impl<'a> Scheduler<'a> {
             false, // fifo_sched: By default when there is low utilization the system will simply go into FIFO mode since that provides better performance. This turns that off since we want to control the scheduling.
             true, // debug: Simply prints all events that occurred to /sys/kernel/debug/tracing/trace_pipe
         )?;
+
         info!(name = SCHEDULER_NAME, cpus = nr_cpus, "scheduler attached");
 
         let summer_1_pid = launch_process("thingdoer");
