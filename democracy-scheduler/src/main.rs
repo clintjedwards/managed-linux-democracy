@@ -250,11 +250,12 @@ fn init_logger() -> Result<()> {
         .add_directive("bollard=off".parse().expect("Invalid directive"))
         .add_directive("reqwest=off".parse().expect("Invalid directive"))
         .add_directive("tungstenite=off".parse().expect("Invalid directive"))
+        .add_directive("libbpf=off".parse().expect("Invalid directive"))
         .add_directive(LevelFilter::DEBUG.into()); // Accept debug level logs and above for everything else
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_target(false)
+        .with_target(true)
         .compact()
         .init();
 
@@ -266,10 +267,7 @@ fn launch_process(bin_name: &str) -> u32 {
     // Launch the process
     let mut command = std::process::Command::new(bin_name);
 
-    let child = command
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .expect("Failed to start process");
+    let child = command.spawn().expect("Failed to start process");
 
     // Get the PID of the launched process
     let pid = child.id();
