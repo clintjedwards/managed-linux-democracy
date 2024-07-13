@@ -1023,6 +1023,7 @@ void BPF_STRUCT_OPS(rustland_exit, struct scx_exit_info *ei)
 	UEI_RECORD(uei, ei);
 }
 
+/*test*/
 /*
  * Scheduling class declaration.
  */
@@ -1040,6 +1041,6 @@ SCX_OPS_DEFINE(rustland,
 	       .init			= (void *)rustland_init,
 	       .exit			= (void *)rustland_exit,
 	       .flags			= SCX_OPS_ENQ_LAST | SCX_OPS_KEEP_BUILTIN_IDLE,
-	       .timeout_ms		= 500000,
+	       .timeout_ms		= 5000,
 	       .dispatch_max_batch	= MAX_DISPATCH_SLOT,
 	       .name			= "rustland");
