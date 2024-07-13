@@ -172,6 +172,14 @@ struct task_ctx {
 	 * current task's cpumask.
 	 */
 	u64 cpumask_cnt;
+
+	/*
+	 * This flag tracks when a task is directly dispatched on a CPU. In
+	 * this case, we want to continue dispatching it on the same CPU for an
+	 * additional round to take advantage of cache locality before
+	 * considering migrating it to a different CPU.
+	 */
+	bool allow_migration;
 };
 
 /* Map that contains task-local storage. */
@@ -359,26 +367,13 @@ dispatch_task(struct task_struct *p, u64 dsq_id,
 	s32 cpu;
 
 	switch (dsq_id) {
+	case SCX_DSQ_LOCAL:
 	case SHARED_DSQ:
 		scx_bpf_dispatch(p, dsq_id, slice, enq_flags);
-		dbg_msg("dispatch: pid=%d (%s) dsq=%llu enq_flags=%llx slice=%llu",
-			p->pid, p->comm, dsq_id, enq_flags, slice);
+		dbg_msg("dispatch: pid=%d (%s) dsq=%llu",
+			p->pid, p->comm, dsq_id);
 		break;
 	default:
-		tctx = lookup_task_ctx(p);
-		if (!tctx) {
-			/*
-			 * If the task doesn't have a context anymore, simply
-			 * bounce it to the first CPU available.
-			 */
-			scx_bpf_dispatch(p, SHARED_DSQ, slice, enq_flags);
-			__sync_fetch_and_add(&nr_bounce_dispatches, 1);
-
-			dbg_msg("dispatch: pid=%d (%s) dsq=%llu enq_flags=%llx slice=%llu bounce",
-				p->pid, p->comm, dsq_id, enq_flags, slice);
-			return;
-		}
-
 		/*
 		 * Dispatch a task to a specific per-CPU DSQ if the target CPU
 		 * can be used (according to the cpumask), otherwise redirect
@@ -396,6 +391,10 @@ dispatch_task(struct task_struct *p, u64 dsq_id,
 		 * and a different cpumask.
 		 */
 		scx_bpf_dispatch(p, dsq_id, slice, enq_flags);
+
+		tctx = lookup_task_ctx(p);
+		if (!tctx)
+			return;
 
 		/* Read current cpumask generation counter */
 		curr_cpumask_cnt = tctx->cpumask_cnt;
@@ -424,21 +423,17 @@ dispatch_task(struct task_struct *p, u64 dsq_id,
 			__sync_fetch_and_add(&nr_bounce_dispatches, 1);
 
 			scx_bpf_dispatch(p, SHARED_DSQ, slice, enq_flags);
-			dbg_msg("dispatch: pid=%d (%s) dsq=%llu enq_flags=%llx slice=%llu bounce",
-				p->pid, p->comm, dsq_id, enq_flags, slice);
+			dbg_msg("dispatch: pid=%d (%s) dsq=%llu bounce",
+				p->pid, p->comm, dsq_id);
 			return;
 		}
 
 		/* Requested dispatch was valid */
-		dbg_msg("dispatch: pid=%d (%s) dsq=%llu enq_flags=%llx slice=%llu",
-			p->pid, p->comm, dsq_id, enq_flags, slice);
+		dbg_msg("dispatch: pid=%d (%s) dsq=%llu",
+			p->pid, p->comm, dsq_id);
 
-		/*
-		 * Wake up the target CPU (only if idle and if we are bouncing
-		 * to a different CPU).
-		 */
-		if (cpu != bpf_get_smp_processor_id())
-			scx_bpf_kick_cpu(cpu, SCX_KICK_IDLE);
+		/* Wake up the target CPU (only if idle) */
+		scx_bpf_kick_cpu(cpu, __COMPAT_SCX_KICK_IDLE);
 		break;
 	}
 }
@@ -462,50 +457,8 @@ static void dispatch_user_scheduler(void)
 	 * Dispatch the scheduler on the first CPU available, likely the
 	 * current one.
 	 */
-	dispatch_task(p, SHARED_DSQ, 0, 0, SCX_ENQ_PREEMPT);
+	dispatch_task(p, SHARED_DSQ, 0, 0, 0);
 	bpf_task_release(p);
-}
-
-/*
- * Directly dispatch a task to its local CPU, bypassing the user-space
- * scheduler.
- */
-static void
-dispatch_direct_local(struct task_struct *p, u64 slice_ns, u64 enq_flags)
-{
-	scx_bpf_dispatch(p, SCX_DSQ_LOCAL, slice_ns, enq_flags);
-
-	dbg_msg("dispatch: pid=%d (%s) dsq=SCX_DSQ_LOCAL enq_flags=%llx slice=%llu direct",
-		p->pid, p->comm, enq_flags, slice_ns);
-
-	__sync_fetch_and_add(&nr_kernel_dispatches, 1);
-}
-
-/*
- * Directly dispatch a task to a target CPU, bypassing the user-space
- * scheduler.
- */
-static int
-dispatch_direct_cpu(struct task_struct *p, s32 cpu, u64 slice_ns, u64 enq_flags)
-{
-	u64 dsq_id = cpu_to_dsq(cpu);
-
-	if (!bpf_cpumask_test_cpu(cpu, p->cpus_ptr))
-		return -EINVAL;
-
-        scx_bpf_dispatch(p, dsq_id, slice_ns, enq_flags);
-	__sync_fetch_and_add(&nr_kernel_dispatches, 1);
-
-	/*
-	 * We know that the CPU is idle here, because it has been assigned in
-	 * select_cpu(), so we don't need to use SCX_KICK_IDLE.
-	 */
-	scx_bpf_kick_cpu(cpu, 0);
-
-	dbg_msg("dispatch: pid=%d (%s) dsq=%llu enq_flags=%llx slice=%llu direct",
-		p->pid, p->comm, dsq_id, enq_flags, slice_ns);
-
-	return 0;
 }
 
 /*
@@ -523,8 +476,9 @@ dispatch_direct_cpu(struct task_struct *p, s32 cpu, u64 slice_ns, u64 enq_flags)
 s32 BPF_STRUCT_OPS(rustland_select_cpu, struct task_struct *p, s32 prev_cpu,
 		   u64 wake_flags)
 {
-	s32 cpu = prev_cpu;
-	bool do_direct = false;
+	struct task_ctx *tctx;
+	bool is_idle = false;
+	s32 cpu;
 
 	/*
 	 * When full_user is enabled, the user-space scheduler is responsible
@@ -532,56 +486,50 @@ s32 BPF_STRUCT_OPS(rustland_select_cpu, struct task_struct *p, s32 prev_cpu,
 	 * possibly its own idle tracking mechanism.
 	 */
 	if (full_user)
-		return cpu;
+		return prev_cpu;
+
+	tctx = lookup_task_ctx(p);
+	if (!tctx)
+		return prev_cpu;
 
 	/*
 	 * If the previously used CPU is still available, keep using it to take
 	 * advantage of the cached working set.
+	 *
+	 * NOTE: assign a shorter time slice (slice_ns / 4) to a task directly
+	 * dispatched to prevent it from gaining excessive CPU bandwidth.
 	 */
-	if (bpf_cpumask_test_cpu(cpu, p->cpus_ptr) &&
-	    scx_bpf_test_and_clear_cpu_idle(cpu)) {
-		do_direct = true;
-		goto out;
+	if (scx_bpf_test_and_clear_cpu_idle(prev_cpu)) {
+		tctx->allow_migration = false;
+		dispatch_task(p, SCX_DSQ_LOCAL, 0, slice_ns / 4, 0);
+		__sync_fetch_and_add(&nr_kernel_dispatches, 1);
+		return prev_cpu;
 	}
 
 	/*
-	 * No need to check for other CPUs if the task can only run on one.
+	 * If the task was directly dispatched give it a second chance to
+	 * remain on the current CPU, instead of immediately migrating it.
 	 */
-	if (p->nr_cpus_allowed == 1)
+	if (!tctx->allow_migration) {
+		tctx->allow_migration = true;
+		return prev_cpu;
+	}
+
+	/*
+	 * Find the best CPU relying on the built-in idle selection logic,
+	 * eventually migrating the task and dispatching directly from here if
+	 * a CPU is available.
+	 */
+	cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
+	if (is_idle) {
+		tctx->allow_migration = false;
+		dispatch_task(p, SCX_DSQ_LOCAL, 0, slice_ns / 4, 0);
+		__sync_fetch_and_add(&nr_kernel_dispatches, 1);
 		return cpu;
-
-	/*
-	 * Try to migrate to a fully idle core, if present.
-	 */
-	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, SCX_PICK_IDLE_CORE);
-	if (cpu >= 0) {
-		do_direct = true;
-		goto out;
 	}
+	tctx->allow_migration = true;
 
-	/*
-	 * Check for any idle CPU.
-	 */
-	cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
-	if (cpu >= 0) {
-		do_direct = true;
-		goto out;
-	}
-
-	/*
-	 * Assign the previously used CPU if all the CPUs are busy.
-	 */
-	cpu = prev_cpu;
-out:
-	/*
-	 * If FIFO mode is completely disabled, allow to dispatch directly
-	 * here, otherwise dispatch directly only if the scheduler is currently
-	 * operating in FIFO mode.
-	 */
-	if ((!fifo_sched || is_fifo_enabled) && do_direct)
-		dispatch_direct_cpu(p, cpu, slice_ns, 0);
-
-	return cpu;
+	return prev_cpu;
 }
 
 /*
@@ -639,7 +587,7 @@ void BPF_STRUCT_OPS(rustland_enqueue, struct task_struct *p, u64 enq_flags)
 		return;
 
 	/*
-	 * Always dispatch per-CPU kthreads to the local CPU DSQ, bypassing the
+	 * Always dispatch per-CPU kthreads on the same CPU, bypassing the
 	 * user-space scheduler.
 	 *
 	 * In this way we can prioritize critical kernel threads that may
@@ -647,21 +595,22 @@ void BPF_STRUCT_OPS(rustland_enqueue, struct task_struct *p, u64 enq_flags)
 	 * long (i.e., ksoftirqd/N, rcuop/N, etc.).
 	 */
 	if (is_kthread(p) && p->nr_cpus_allowed == 1) {
-		dispatch_direct_local(p, slice_ns, enq_flags);
+		dispatch_task(p, SCX_DSQ_LOCAL, 0, slice_ns, enq_flags);
+		__sync_fetch_and_add(&nr_kernel_dispatches, 1);
 		return;
 	}
 
 	/*
-	 * Check if we can dispatch the task directly, bypassing the user-space
-	 * scheduler.
+	 * Dispatch directly to the target CPU DSQ if the scheduler is set to
+	 * FIFO mode.
 	 */
 	if (!full_user && is_fifo_enabled) {
-		if (!dispatch_direct_cpu(p, scx_bpf_task_cpu(p), slice_ns, enq_flags))
-			return;
-		/*
-		 * Use the local DSQ if the target CPU is not valid anymore.
-		 */
-		dispatch_direct_local(p, slice_ns, enq_flags);
+		s32 cpu = scx_bpf_task_cpu(p);
+
+		scx_bpf_dispatch(p, cpu_to_dsq(cpu), slice_ns, enq_flags);
+		scx_bpf_kick_cpu(cpu, __COMPAT_SCX_KICK_IDLE);
+
+		__sync_fetch_and_add(&nr_kernel_dispatches, 1);
 		return;
 	}
 
@@ -695,7 +644,7 @@ static long handle_dispatched_task(struct bpf_dynptr *dynptr, void *context)
 {
 	const struct dispatched_task_ctx *task;
 	struct task_struct *p;
-	u64 enq_flags = 0, dsq_id;
+	u64 enq_flags = 0;
 
 	/* Get a pointer to the dispatched task */
 	task = bpf_dynptr_data(dynptr, 0, sizeof(*task));
@@ -724,12 +673,11 @@ static long handle_dispatched_task(struct bpf_dynptr *dynptr, void *context)
 	 * available.
 	 */
 	if (task->flags & RL_CPU_ANY)
-		dsq_id = SHARED_DSQ;
+		dispatch_task(p, SHARED_DSQ, 0, task->slice_ns, enq_flags);
 	else
-		dsq_id = cpu_to_dsq(task->cpu);
-	dispatch_task(p, dsq_id, task->cpumask_cnt, task->slice_ns, enq_flags);
+		dispatch_task(p, cpu_to_dsq(task->cpu),
+			      task->cpumask_cnt, task->slice_ns, enq_flags);
 	bpf_task_release(p);
-
 	__sync_fetch_and_add(&nr_user_dispatches, 1);
 
 	return !scx_bpf_dispatch_nr_slots();
@@ -761,14 +709,16 @@ void BPF_STRUCT_OPS(rustland_dispatch, s32 cpu, struct task_struct *prev)
 	 */
 	bpf_user_ringbuf_drain(&dispatched, handle_dispatched_task, NULL, 0);
 
-	/* Consume first task both from the shared DSQ and the per-CPU DSQ */
-	scx_bpf_consume(SHARED_DSQ);
-	if (scx_bpf_consume(cpu_to_dsq(cpu))) {
-		/*
-		 * Re-kick the current CPU if there are more tasks in the
-		 * per-CPU DSQ
-		 */
-		scx_bpf_kick_cpu(cpu, 0);
+	/* Consume all tasks enqueued in the shared DSQ */
+	bpf_repeat(MAX_ENQUEUED_TASKS) {
+		if (!scx_bpf_consume(SHARED_DSQ))
+			break;
+	}
+
+	/* Consume all tasks enqueued in the current CPU's DSQ first */
+	bpf_repeat(MAX_ENQUEUED_TASKS) {
+		if (!scx_bpf_consume(cpu_to_dsq(cpu)))
+			break;
 	}
 }
 
@@ -831,8 +781,8 @@ void BPF_STRUCT_OPS(rustland_update_idle, s32 cpu, bool idle)
 	if (usersched_has_pending_tasks()) {
 		set_usersched_needed();
 		/*
-		 * Wake up the idle CPU and trigger a resched, so that it can
-		 * immediately accept dispatched tasks.
+		 * Wake up the idle CPU, so that it can immediately accept
+		 * dispatched tasks.
 		 */
 		if (!low_power || !nr_running)
 			scx_bpf_kick_cpu(cpu, 0);
@@ -950,8 +900,10 @@ static bool should_enable_fifo(void)
 	nr_waiting_avg = (nr_waiting_avg + nr_waiting) / 2;
 
 	/*
-	 * The condition to go back to FIFO mode is to have no tasks (in
-	 * average) that are waiting to be scheduled.
+	 * The condition to enter in FIFO mode is to have no tasks (in average)
+	 * that are waiting to be scheduled.
+	 *
+	 * Exiting from FIFO mode requires to have almost all the CPUs busy.
 	 */
 	return nr_waiting_avg == 0;
 }
@@ -1057,6 +1009,8 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(rustland_init)
 	err = usersched_timer_init();
 	if (err)
 		return err;
+        if (!switch_partial)
+		__COMPAT_scx_bpf_switch_all();
 
 	return 0;
 }

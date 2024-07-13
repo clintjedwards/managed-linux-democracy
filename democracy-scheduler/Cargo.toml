@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
-scx_rustland_core = { git = "https://github.com/clintjedwards/scx", branch = "main" }
+scx_rustland_core = { git = "https://github.com/clintjedwards/scx", branch = "cje/custom" }
 scx_utils = "0.8.1"
 plain = "0.2.3"
 clap = { version = "4.1", features = ["derive", "env", "unicode", "wrap_help"] }
@@ -22,5 +22,5 @@ serde = { version = "1.0.173", features = ["derive"] }
 
 
 [build-dependencies]
-scx_rustland_core = { git = "https://github.com/clintjedwards/scx", branch = "main" }
+scx_rustland_core = { git = "https://github.com/clintjedwards/scx", branch = "cje/custom" }
 scx_utils = "0.8.1"
