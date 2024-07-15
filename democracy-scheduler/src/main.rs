@@ -268,7 +268,7 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     command.arg(name);
 
     let child = command
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::inherit())
         .spawn()
         .expect("Failed to start process");
 
