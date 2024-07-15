@@ -26,6 +26,8 @@ use std::path::Path;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use serde::Deserialize;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -275,6 +277,11 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     // Get the PID of the launched process
     let pid = child.id();
     info!(pid = pid, bin_name = bin_name, "Launched process");
+
+    let pidkill = Pid::from_raw(pid as i32);
+
+    // Send the SIGSTOP signal to the task
+    kill(pidkill, Signal::SIGSTOP).unwrap();
 
     pid
 }
