@@ -125,10 +125,10 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    let pidkill = Pid::from_raw(task.pid);
+                    // let pidkill = Pid::from_raw(task.pid);
 
-                    // Send the SIGSTOP signal to the task
-                    kill(pidkill, Signal::SIGSTOP).unwrap();
+                    // // Send the SIGSTOP signal to the task
+                    // kill(pidkill, Signal::SIGSTOP).unwrap();
 
                     // If it does grab it and stick it in the map
                     self.task_map.insert(
@@ -138,6 +138,7 @@ impl<'a> Scheduler<'a> {
                             vruntime: 0,
                         }),
                     );
+                    continue;
                 }
 
                 // The queue is empty.
@@ -167,7 +168,10 @@ impl<'a> Scheduler<'a> {
 
         let winner_pid = self.owner_map.get(&winner).unwrap();
         let winner_task = self.task_map.get(winner_pid).unwrap();
-        let winner_task = winner_task.clone().unwrap();
+        let winner_task = match winner_task.clone() {
+            Some(task) => task,
+            None => return,
+        };
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
         dispatched_task.set_slice_ns(100000000);
