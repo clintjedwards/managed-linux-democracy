@@ -98,8 +98,8 @@ impl<'a> Scheduler<'a> {
 
         info!(name = SCHEDULER_NAME, cpus = nr_cpus, "scheduler attached");
 
-        let summer_1_pid = launch_process("thingdoer");
-        let summer_2_pid = launch_process("thingdoer");
+        let summer_1_pid = launch_process("thingdoer", "summer1");
+        let summer_2_pid = launch_process("thingdoer", "summer2");
 
         task_map.insert(summer_1_pid, 0);
         task_map.insert(summer_2_pid, 0);
@@ -266,9 +266,10 @@ fn init_logger() -> Result<()> {
 }
 
 // Launches a process and returns the PID.
-fn launch_process(bin_name: &str) -> u32 {
+fn launch_process(bin_name: &str, name: &str) -> u32 {
     // Launch the process
     let mut command = std::process::Command::new(bin_name);
+    command.arg(name);
 
     let child = command.spawn().expect("Failed to start process");
 
