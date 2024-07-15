@@ -143,7 +143,6 @@ impl<'a> Scheduler<'a> {
 
                 // The queue is empty.
                 Ok(None) => {
-                    debug!("queue is empty");
                     break;
                 }
 
@@ -156,6 +155,8 @@ impl<'a> Scheduler<'a> {
         }
 
         // Now we can focus on scheduling the tasks we want to.
+
+        self.bpf.update_tasks(Some(0), Some(2));
 
         let winner = match get_current_winner() {
             Ok(winner) => winner,
@@ -175,6 +176,7 @@ impl<'a> Scheduler<'a> {
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
         dispatched_task.set_slice_ns(100000000);
+        dispatched_task.set_cpu(0);
 
         match self.bpf.dispatch_task(&dispatched_task) {
             Ok(_) => {
