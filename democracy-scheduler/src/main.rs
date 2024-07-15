@@ -63,10 +63,16 @@ impl Competitors {
 // and print the winner via some other way(not sure on this yet) to make the scheduler spit out the winner in another way.
 // We should also make a live graph of who is winning.
 
+#[derive(Debug, Clone)]
+struct Task {
+    pub vruntime: u64,
+    pub queued_task: QueuedTask,
+}
+
 // Main scheduler object
 struct Scheduler<'a> {
     bpf: BpfScheduler<'a>,                // BPF connector
-    task_map: HashMap<u32, u64>,          // pid to vruntime
+    task_map: HashMap<u32, Option<Task>>, // pid to task
     owner_map: HashMap<Competitors, u32>, // pid to binary owner
 }
 
@@ -106,6 +112,8 @@ impl<'a> Scheduler<'a> {
     }
 
     fn schedule(&mut self) {
+        // First lets drain all the tasks from the queue and only keep track of the ones that we want to focus on
+        // scheduling.
         loop {
             match self.bpf.dequeue_task() {
                 // We were able to get a new task to schedule.
@@ -115,66 +123,65 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    debug!(pid = task.pid, "Deciding if the schedule task");
-
-                    // We should probably do this outside of the scheduler loop.
-                    // But we'll optimize later.
-                    let winner = match get_current_winner() {
-                        Ok(winner) => winner,
-                        Err(e) => {
-                            error!(err = %e, "There was no winner when we checked");
-                            std::thread::sleep(std::time::Duration::from_secs(1));
-                            continue;
-                        }
-                    };
-
-                    let winner_pid = self.owner_map.get(&winner).unwrap();
-
-                    if task.pid as u32 != *winner_pid {
-                        debug!("pid {} is not a winning pid {}", task.pid, winner_pid);
-                        continue;
-                    }
-
-                    // If we're continuing here its because we have the correct task
-                    // that we want to schedule.
-
-                    let winner_current_runtime = self.task_map.get(&(task.pid as u32)).unwrap();
-
-                    let mut dispatched_task = DispatchedTask::new(&task);
-                    dispatched_task.set_slice_ns(1000000000);
-
-                    match self.bpf.dispatch_task(&dispatched_task) {
-                        Ok(_) => {
-                            info!(pid = task.pid, owner = ?winner, "Task successfully scheduled");
-                        }
-                        Err(e) => {
-                            error!(pid = task.pid, owner = ?winner, error = %e, "Could not schedule task");
-                            break;
-                            // If there is an error here in a real scheudler we would attempt to schedule
-                            // the task again, but here we just error and continue.
-                        }
-                    }
-
-                    self.task_map
-                        .insert(task.pid as u32, winner_current_runtime + 1000000000);
-                    break; // We scheudled the task that we wanted to we don't have to care anymore.
+                    // If it does grab it and stick it in the map
+                    self.task_map.insert(
+                        task.pid as u32,
+                        Some(Task {
+                            queued_task: task,
+                            vruntime: 0,
+                        }),
+                    );
                 }
 
                 // The queue is empty.
                 Ok(None) => {
-                    debug!("queue is empty; yielding the scheduler");
+                    debug!("queue is empty");
                     break;
                 }
 
                 // Some error occurred.
                 Err(err) => {
-                    error!(err = %err, "Encountered error while draining tasks")
-                    // I have no idea if its safe to keep looping after this?
+                    error!(err = %err, "Encountered error while draining tasks");
+                    continue;
                 }
             }
         }
 
-        // Yield to avoid using too much CPU form the scheduler itself.
+        // Now we can focus on scheduling the tasks we want to.
+
+        let winner = match get_current_winner() {
+            Ok(winner) => winner,
+            Err(e) => {
+                error!(err = %e, "There was no winner when we checked");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                return;
+            }
+        };
+
+        let winner_pid = self.owner_map.get(&winner).unwrap();
+        let winner_task = self.task_map.get(winner_pid).unwrap();
+        let winner_task = winner_task.clone().unwrap();
+
+        let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
+        dispatched_task.set_slice_ns(1000000000);
+
+        match self.bpf.dispatch_task(&dispatched_task) {
+            Ok(_) => {
+                info!(pid =  winner_pid, owner = ?winner, "Task successfully scheduled");
+            }
+            Err(e) => {
+                error!(pid = winner_pid, owner = ?winner, error = %e, "Could not schedule task");
+                // If there is an error here in a real scheudler we would attempt to schedule
+                // the task again, but here we just error and continue.
+            }
+        }
+
+        let mut winner_task = winner_task.clone();
+        winner_task.vruntime += 1000000000;
+
+        self.task_map.insert(*winner_pid, Some(winner_task.clone()));
+
+        // Yield to avoid using too much CPU from the scheduler itself.
         thread::yield_now();
     }
 
@@ -185,7 +192,6 @@ impl<'a> Scheduler<'a> {
         }
 
         Ok(())
-        //self.bpf.shutdown_and_report()
     }
 }
 
@@ -215,8 +221,8 @@ fn main() -> Result<()> {
     let summer_1_pid = launch_process("thingdoer", "summer1");
     let summer_2_pid = launch_process("thingdoer", "summer2");
 
-    sched.task_map.insert(summer_1_pid, 0);
-    sched.task_map.insert(summer_2_pid, 0);
+    sched.task_map.insert(summer_1_pid, None);
+    sched.task_map.insert(summer_2_pid, None);
 
     sched.owner_map.insert(Competitors::Summer1, summer_1_pid);
     sched.owner_map.insert(Competitors::Summer2, summer_2_pid);
@@ -287,16 +293,8 @@ struct CurrentWinnerResponse {
     winner: String,
 }
 
-// Return current timestamp in ns.
-fn now() -> u64 {
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap();
-    ts.as_nanos() as u64
-}
-
 fn get_current_winner() -> Result<Competitors> {
-    let url = "http://localhost:8080";
+    let url = "http://localhost:8080/api/current_winner";
 
     let winner = reqwest::blocking::Client::new()
         .get(url)
