@@ -125,6 +125,11 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
+                    let pidkill = Pid::from_raw(task.pid);
+
+                    // Send the SIGSTOP signal to the task
+                    kill(pidkill, Signal::SIGSTOP).unwrap();
+
                     // If it does grab it and stick it in the map
                     self.task_map.insert(
                         task.pid as u32,
@@ -162,7 +167,6 @@ impl<'a> Scheduler<'a> {
 
         let winner_pid = self.owner_map.get(&winner).unwrap();
         let winner_task = self.task_map.get(winner_pid).unwrap();
-        dbg!(winner_task);
         let winner_task = winner_task.clone().unwrap();
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
@@ -282,11 +286,6 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     // Get the PID of the launched process
     let pid = child.id();
     info!(pid = pid, bin_name = bin_name, "Launched process");
-
-    let pidkill = Pid::from_raw(pid as i32);
-
-    // Send the SIGSTOP signal to the task
-    kill(pidkill, Signal::SIGSTOP).unwrap();
 
     pid
 }
