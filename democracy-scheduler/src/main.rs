@@ -98,15 +98,6 @@ impl<'a> Scheduler<'a> {
 
         info!(name = SCHEDULER_NAME, cpus = nr_cpus, "scheduler attached");
 
-        let summer_1_pid = launch_process("thingdoer", "summer1");
-        let summer_2_pid = launch_process("thingdoer", "summer2");
-
-        task_map.insert(summer_1_pid, 0);
-        task_map.insert(summer_2_pid, 0);
-
-        owner_map.insert(Competitors::Summer1, summer_1_pid);
-        owner_map.insert(Competitors::Summer2, summer_2_pid);
-
         Ok(Self {
             bpf,
             task_map,
@@ -119,14 +110,7 @@ impl<'a> Scheduler<'a> {
             match self.bpf.dequeue_task() {
                 // We were able to get a new task to schedule.
                 Ok(Some(task)) => {
-                    // If the task is exiting the cpu will be < 0; We don't particularly care about this.
-                    if task.cpu < 0 {
-                        debug!("Skipping exiting task");
-                        continue;
-                    }
-
                     // check if the pid is one we care about
-
                     if !self.task_map.contains_key(&(task.pid as u32)) {
                         debug!("PID ({}) isn't one that we care about", task.pid);
                         continue;
@@ -179,6 +163,7 @@ impl<'a> Scheduler<'a> {
 
                 // The queue is empty.
                 Ok(None) => {
+                    debug!("queue is empty; yielding the scheduler");
                     break;
                 }
 
@@ -206,11 +191,11 @@ impl<'a> Scheduler<'a> {
 }
 
 // Unregister the scheduler.
-impl<'a> Drop for Scheduler<'a> {
-    fn drop(&mut self) {
-        info!("Unregister {} scheduler", SCHEDULER_NAME);
-    }
-}
+// impl<'a> Drop for Scheduler<'a> {
+//     fn drop(&mut self) {
+//         info!("Unregister {} scheduler", SCHEDULER_NAME);
+//     }
+// }
 
 fn main() -> Result<()> {
     init_logger().unwrap();
@@ -226,9 +211,18 @@ fn main() -> Result<()> {
 
     let mut last_scheduled = 0;
 
-    loop {
-        let mut sched = Scheduler::init()?;
+    let mut sched = Scheduler::init()?;
 
+    let summer_1_pid = launch_process("thingdoer", "summer1");
+    let summer_2_pid = launch_process("thingdoer", "summer2");
+
+    sched.task_map.insert(summer_1_pid, 0);
+    sched.task_map.insert(summer_2_pid, 0);
+
+    sched.owner_map.insert(Competitors::Summer1, summer_1_pid);
+    sched.owner_map.insert(Competitors::Summer2, summer_2_pid);
+
+    loop {
         let time_now = now();
         let next_scheduled_time = last_scheduled + 1000000000;
         if time_now < next_scheduled_time {
