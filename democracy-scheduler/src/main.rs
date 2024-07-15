@@ -76,8 +76,8 @@ impl<'a> Scheduler<'a> {
         let topo = Topology::new().expect("Failed to build host topology");
 
         // Scheduler task map to store tasks information.
-        let mut task_map = HashMap::new();
-        let mut owner_map = HashMap::new();
+        let task_map = HashMap::new();
+        let owner_map = HashMap::new();
 
         let nr_cpus = topo.nr_cpus_possible();
 
@@ -112,7 +112,6 @@ impl<'a> Scheduler<'a> {
                 Ok(Some(task)) => {
                     // check if the pid is one we care about
                     if !self.task_map.contains_key(&(task.pid as u32)) {
-                        debug!("PID ({}) isn't one that we care about", task.pid);
                         continue;
                     }
 
@@ -123,7 +122,7 @@ impl<'a> Scheduler<'a> {
                     let winner = match get_current_winner() {
                         Ok(winner) => winner,
                         Err(e) => {
-                            debug!(err = %e, "There was no winner when we checked");
+                            error!(err = %e, "There was no winner when we checked");
                             std::thread::sleep(std::time::Duration::from_secs(1));
                             continue;
                         }
@@ -227,7 +226,8 @@ fn main() -> Result<()> {
         let next_scheduled_time = last_scheduled + 1000000000;
         if time_now < next_scheduled_time {
             debug!("Not time to schedule anything yet");
-            break;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            continue;
         }
         last_scheduled = now();
 
@@ -270,7 +270,10 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     let mut command = std::process::Command::new(bin_name);
     command.arg(name);
 
-    let child = command.spawn().expect("Failed to start process");
+    let child = command
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to start process");
 
     // Get the PID of the launched process
     let pid = child.id();
