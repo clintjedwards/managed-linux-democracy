@@ -162,6 +162,7 @@ impl<'a> Scheduler<'a> {
 
         let winner_pid = self.owner_map.get(&winner).unwrap();
         let winner_task = self.task_map.get(winner_pid).unwrap();
+        dbg!(winner_task);
         let winner_task = winner_task.clone().unwrap();
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
