@@ -165,7 +165,7 @@ impl<'a> Scheduler<'a> {
         let winner_task = winner_task.clone().unwrap();
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
-        dispatched_task.set_slice_ns(1000000000);
+        dispatched_task.set_slice_ns(100000000);
 
         match self.bpf.dispatch_task(&dispatched_task) {
             Ok(_) => {
@@ -178,6 +178,10 @@ impl<'a> Scheduler<'a> {
             }
         }
 
+        // this is a hack so the other scheduler doesn't try to get to it before we do.
+        let pidkill = Pid::from_raw(*winner_pid as i32);
+        kill(pidkill, Signal::SIGCONT).unwrap();
+
         let mut winner_task = winner_task.clone();
         winner_task.vruntime += 1000000000;
 
@@ -186,11 +190,11 @@ impl<'a> Scheduler<'a> {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Yield to avoid using too much CPU from the scheduler itself.
-        thread::yield_now();
+        // thread::yield_now();
     }
 
     fn run(&mut self, shutdown: Arc<AtomicBool>) -> Result<()> {
-        while !shutdown.load(Ordering::Relaxed) && !self.bpf.exited() {
+        while !shutdown.load(Ordering::Relaxed) {
             // Call the main scheduler body.
             self.schedule();
         }
