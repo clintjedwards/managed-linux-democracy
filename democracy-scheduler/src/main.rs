@@ -125,10 +125,10 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    // let pidkill = Pid::from_raw(task.pid);
+                    let pidkill = Pid::from_raw(task.pid);
 
-                    // // Send the SIGSTOP signal to the task
-                    // kill(pidkill, Signal::SIGSTOP).unwrap();
+                    // Send the SIGSTOP signal to the task
+                    kill(pidkill, Signal::SIGSTOP).unwrap();
 
                     // If it does grab it and stick it in the map
                     self.task_map.insert(
@@ -176,7 +176,6 @@ impl<'a> Scheduler<'a> {
 
         let mut dispatched_task = DispatchedTask::new(&winner_task.queued_task);
         dispatched_task.set_slice_ns(100000000);
-        dispatched_task.set_cpu(0);
 
         match self.bpf.dispatch_task(&dispatched_task) {
             Ok(_) => {
@@ -235,22 +234,16 @@ fn main() -> Result<()> {
 
     let mut sched = Scheduler::init()?;
 
+    unsafe {
+        let pid = libc::getpid();
+        let param = libc::sched_param { sched_priority: 0 };
+        if libc::sched_setscheduler(pid, 7, &param) != 0 {
+            panic!("{:#?}", std::io::Error::last_os_error());
+        }
+    }
+
     let summer_1_pid = launch_process("thingdoer", "summer1");
     let summer_2_pid = launch_process("thingdoer", "summer2");
-
-    unsafe {
-        let param = libc::sched_param { sched_priority: 0 };
-        if libc::sched_setscheduler(summer_1_pid as i32, 7, &param) != 0 {
-            panic!("{:#?}", std::io::Error::last_os_error());
-        }
-    }
-
-    unsafe {
-        let param = libc::sched_param { sched_priority: 0 };
-        if libc::sched_setscheduler(summer_2_pid as i32, 7, &param) != 0 {
-            panic!("{:#?}", std::io::Error::last_os_error());
-        }
-    }
 
     sched.task_map.insert(summer_1_pid, None);
     sched.task_map.insert(summer_2_pid, None);
