@@ -125,10 +125,10 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    let pidkill = Pid::from_raw(task.pid);
+                    // let pidkill = Pid::from_raw(task.pid);
 
-                    // Send the SIGSTOP signal to the task
-                    kill(pidkill, Signal::SIGSTOP).unwrap();
+                    // // Send the SIGSTOP signal to the task
+                    // kill(pidkill, Signal::SIGSTOP).unwrap();
 
                     // If it does grab it and stick it in the map
                     self.task_map.insert(
@@ -189,8 +189,8 @@ impl<'a> Scheduler<'a> {
         }
 
         // this is a hack so the other scheduler doesn't try to get to it before we do.
-        let pidkill = Pid::from_raw(*winner_pid as i32);
-        kill(pidkill, Signal::SIGCONT).unwrap();
+        // let pidkill = Pid::from_raw(*winner_pid as i32);
+        // kill(pidkill, Signal::SIGCONT).unwrap();
 
         let mut winner_task = winner_task.clone();
         winner_task.vruntime += 1000000000;
