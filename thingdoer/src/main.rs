@@ -45,5 +45,10 @@ fn main() {
         let choice = word_choice.choose(&mut rng).unwrap();
         println!("{} {}!", name.yellow(), choice);
         std::thread::sleep(std::time::Duration::from_secs(1));
+        unsafe {
+            if libc::sched_yield() != 0 {
+                panic!("{:#?}", std::io::Error::last_os_error());
+            }
+        }
     }
 }
