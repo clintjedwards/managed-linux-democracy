@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     })
     .context("Error setting Ctrl-C handler")?;
 
-    let mut last_scheduled = 0;
+    let mut last_scheduled = std::time::Instant::now();
 
     let mut sched = Scheduler::init()?;
 
@@ -222,14 +222,14 @@ fn main() -> Result<()> {
     sched.owner_map.insert(Competitors::Summer2, summer_2_pid);
 
     loop {
-        let time_now = now();
-        let next_scheduled_time = last_scheduled + 1000000000;
+        let time_now = std::time::Instant::now();
+        let next_scheduled_time = last_scheduled + std::time::Duration::from_secs(1);
         if time_now < next_scheduled_time {
             debug!("Not time to schedule anything yet");
             std::thread::sleep(std::time::Duration::from_millis(500));
             continue;
         }
-        last_scheduled = now();
+        last_scheduled = time_now;
 
         // Start the scheduler.
         if let Err(e) = sched.run(shutdown.clone()) {
