@@ -116,15 +116,23 @@ impl<'a> Scheduler<'a> {
 
     fn schedule(&mut self) {
         loop {
-            debug!("Scheduler has passed next_scheduled_time; attempting to schedule a task");
-
             match self.bpf.dequeue_task() {
                 // We were able to get a new task to schedule.
                 Ok(Some(task)) => {
                     // If the task is exiting the cpu will be < 0; We don't particularly care about this.
                     if task.cpu < 0 {
+                        debug!("Skipping exiting task");
                         continue;
                     }
+
+                    // check if the pid is one we care about
+
+                    if !self.task_map.contains_key(&(task.pid as u32)) {
+                        debug!("PID ({}) isn't one that we care about", task.pid);
+                        continue;
+                    }
+
+                    debug!(pid = task.pid, "Deciding if the schedule task");
 
                     // We should probably do this outside of the scheduler loop.
                     // But we'll optimize later.
@@ -140,10 +148,7 @@ impl<'a> Scheduler<'a> {
                     let winner_pid = self.owner_map.get(&winner).unwrap();
 
                     if task.pid as u32 != *winner_pid {
-                        debug!(
-                            "We found a pid {} that did not match the winner pid {}",
-                            task.pid, winner_pid
-                        );
+                        debug!("pid {} is not a winning pid {}", task.pid, winner_pid);
                         continue;
                     }
 
@@ -157,7 +162,7 @@ impl<'a> Scheduler<'a> {
 
                     match self.bpf.dispatch_task(&dispatched_task) {
                         Ok(_) => {
-                            debug!(pid = task.pid, owner = ?winner, "Task successfully scheduled");
+                            info!(pid = task.pid, owner = ?winner, "Task successfully scheduled");
                         }
                         Err(e) => {
                             error!(pid = task.pid, owner = ?winner, error = %e, "Could not schedule task");
