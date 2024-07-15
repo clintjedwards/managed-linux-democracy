@@ -238,6 +238,20 @@ fn main() -> Result<()> {
     let summer_1_pid = launch_process("thingdoer", "summer1");
     let summer_2_pid = launch_process("thingdoer", "summer2");
 
+    unsafe {
+        let param = libc::sched_param { sched_priority: 0 };
+        if libc::sched_setscheduler(summer_1_pid as i32, 7, &param) != 0 {
+            panic!("{:#?}", std::io::Error::last_os_error());
+        }
+    }
+
+    unsafe {
+        let param = libc::sched_param { sched_priority: 0 };
+        if libc::sched_setscheduler(summer_2_pid as i32, 7, &param) != 0 {
+            panic!("{:#?}", std::io::Error::last_os_error());
+        }
+    }
+
     sched.task_map.insert(summer_1_pid, None);
     sched.task_map.insert(summer_2_pid, None);
 
