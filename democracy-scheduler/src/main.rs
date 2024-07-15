@@ -181,6 +181,8 @@ impl<'a> Scheduler<'a> {
 
         self.task_map.insert(*winner_pid, Some(winner_task.clone()));
 
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
         // Yield to avoid using too much CPU from the scheduler itself.
         thread::yield_now();
     }
@@ -214,8 +216,6 @@ fn main() -> Result<()> {
     })
     .context("Error setting Ctrl-C handler")?;
 
-    let mut last_scheduled = std::time::Instant::now();
-
     let mut sched = Scheduler::init()?;
 
     let summer_1_pid = launch_process("thingdoer", "summer1");
@@ -228,15 +228,6 @@ fn main() -> Result<()> {
     sched.owner_map.insert(Competitors::Summer2, summer_2_pid);
 
     loop {
-        let time_now = std::time::Instant::now();
-        let next_scheduled_time = last_scheduled + std::time::Duration::from_secs(1);
-        if time_now < next_scheduled_time {
-            debug!("Not time to schedule anything yet");
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            continue;
-        }
-        last_scheduled = time_now;
-
         // Start the scheduler.
         if let Err(e) = sched.run(shutdown.clone()) {
             eprint!("scheduler has shutdown; {:#?}", e);
