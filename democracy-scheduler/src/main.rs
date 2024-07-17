@@ -143,6 +143,7 @@ impl<'a> Scheduler<'a> {
 
                 // The queue is empty.
                 Ok(None) => {
+                    self.bpf.update_tasks(Some(0), Some(0));
                     break;
                 }
 
@@ -153,10 +154,6 @@ impl<'a> Scheduler<'a> {
                 }
             }
         }
-
-        // Now we can focus on scheduling the tasks we want to.
-
-        self.bpf.update_tasks(Some(0), Some(2));
 
         let winner = match get_current_winner() {
             Ok(winner) => winner,
@@ -233,14 +230,6 @@ fn main() -> Result<()> {
     .context("Error setting Ctrl-C handler")?;
 
     let mut sched = Scheduler::init()?;
-
-    unsafe {
-        let pid = libc::getpid();
-        let param = libc::sched_param { sched_priority: 0 };
-        if libc::sched_setscheduler(pid, 7, &param) != 0 {
-            panic!("{:#?}", std::io::Error::last_os_error());
-        }
-    }
 
     let summer_1_pid = launch_process("thingdoer", "summer1");
     let summer_2_pid = launch_process("thingdoer", "summer2");
