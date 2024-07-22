@@ -9,7 +9,7 @@ use scx_utils::Topology;
 use scx_utils::TopologyMap;
 use scx_utils::UserExitInfo;
 
-use std::thread;
+use std::{io::Stdout, thread};
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -275,7 +275,10 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     let mut command = std::process::Command::new(bin_name);
     command.arg(name);
 
-    let child = command.spawn().expect("Failed to start process");
+    let child = command
+        .stdout(std::process::Stdio::null()) // Don't overwhelm with stdout logs
+        .spawn()
+        .expect("Failed to start process");
 
     // Get the PID of the launched process
     let pid = child.id();
