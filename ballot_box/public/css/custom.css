@@ -1,0 +1,28 @@
+.chart-container {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    margin-bottom: 20px;
+}
+
+.chart {
+    width: 70%;
+}
+
+.chart caption {
+    font-size: 1.2em;
+    margin-bottom: 10px;
+}
+
+td {
+    text-align: center;
+    padding: 10px 5px;
+}
+
+.chart tr {
+    margin-bottom: 20px;
+}
+
+.bar {
+    transition: width 0.5s;
+}
