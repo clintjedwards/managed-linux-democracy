@@ -125,11 +125,6 @@ impl<'a> Scheduler<'a> {
                         continue;
                     }
 
-                    // let pidkill = Pid::from_raw(task.pid);
-
-                    // // Send the SIGSTOP signal to the task
-                    // kill(pidkill, Signal::SIGSTOP).unwrap();
-
                     // If it does grab it and stick it in the map
                     self.task_map.insert(
                         task.pid as u32,
@@ -280,10 +275,7 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
     let mut command = std::process::Command::new(bin_name);
     command.arg(name);
 
-    let child = command
-        .stdout(std::process::Stdio::inherit())
-        .spawn()
-        .expect("Failed to start process");
+    let child = command.spawn().expect("Failed to start process");
 
     // Get the PID of the launched process
     let pid = child.id();
