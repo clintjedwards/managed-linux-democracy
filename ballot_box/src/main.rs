@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use dashmap::DashMap;
+use pnet::datalink::{self, NetworkInterface};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -77,8 +78,13 @@ struct VoteResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct CurrentWinnerResponse {
-    winner: String,
+struct VotesResponse {
+    votes: Vec<(String, u64)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SystemResponse {
+    address: String,
 }
 
 #[tokio::main]
@@ -96,8 +102,8 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/api/vote", post(vote_handler))
-        .route("/api/current_winner", get(current_winner_handler))
+        .route("/api/system", get(system_handler))
+        .route("/api/votes", get(votes_handler).post(vote_handler))
         .route(
             "/",
             get(|| async { static_handler(Path("".to_string())).await }),
@@ -116,7 +122,13 @@ async fn main() {
     .unwrap();
 }
 
-pub async fn static_handler(Path(path): Path<String>) -> Result<Response<Body>, AppError> {
+async fn system_handler() -> Result<Json<SystemResponse>, AppError> {
+    Ok(Json(SystemResponse {
+        address: get_local_ipv4_address().unwrap().to_string(),
+    }))
+}
+
+async fn static_handler(Path(path): Path<String>) -> Result<Response<Body>, AppError> {
     let path = if path.is_empty() {
         "index.html".to_string()
     } else {
@@ -145,40 +157,25 @@ pub async fn static_handler(Path(path): Path<String>) -> Result<Response<Body>, 
     }
 }
 
-async fn current_winner_handler(
+async fn votes_handler(
     State(state): State<std::sync::Arc<AppContext>>,
-) -> Result<Json<CurrentWinnerResponse>, AppError> {
-    let mut winner = ("", 0);
-
-    if state
-        .summer1_votes
-        .load(std::sync::atomic::Ordering::Relaxed)
-        > winner.1
-    {
-        winner = (
-            "summer1",
+) -> Result<Json<VotesResponse>, AppError> {
+    let votes = vec![
+        (
+            "summer1".into(),
             state
                 .summer1_votes
                 .load(std::sync::atomic::Ordering::Relaxed),
-        )
-    }
-
-    if state
-        .summer2_votes
-        .load(std::sync::atomic::Ordering::Relaxed)
-        > winner.1
-    {
-        winner = (
-            "summer2",
+        ),
+        (
+            "summer2".into(),
             state
                 .summer2_votes
                 .load(std::sync::atomic::Ordering::Relaxed),
-        )
-    }
+        ),
+    ];
 
-    Ok(Json(CurrentWinnerResponse {
-        winner: winner.0.into(),
-    }))
+    Ok(Json(VotesResponse { votes }))
 }
 
 async fn vote_handler(
@@ -214,9 +211,7 @@ async fn vote_handler(
         Err(_) => {
             return Err(AppError {
                 status: axum::http::StatusCode::BAD_REQUEST,
-                message: "Not a valid vote; Must be one of 'vim', 'emacs', 'vscode';\
-                 If your preferred choice of text editor isn't here...it sucks to suck."
-                    .into(),
+                message: "Not a valid vote; Must be one of 'summer1', 'summer2'".into(),
             });
         }
     };
@@ -272,4 +267,18 @@ fn init_logger() -> Result<()> {
         .init();
 
     Ok(())
+}
+
+fn get_local_ipv4_address() -> Option<Ipv4Addr> {
+    let interfaces = datalink::interfaces();
+    for interface in interfaces {
+        for ip in interface.ips {
+            if let pnet::ipnetwork::IpNetwork::V4(ipv4) = ip {
+                if !ipv4.ip().is_loopback() {
+                    return Some(ipv4.ip());
+                }
+            }
+        }
+    }
+    None
 }
