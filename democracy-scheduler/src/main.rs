@@ -288,8 +288,14 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
 }
 
 #[derive(Debug, Deserialize)]
+struct Vote {
+    name: String,
+    count: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct CurrentWinnerResponse {
-    current_tally: Vec<(String, u32)>,
+    current_tally: Vec<Vote>,
 }
 
 fn get_current_winner() -> Result<Competitors> {
@@ -302,13 +308,16 @@ fn get_current_winner() -> Result<Competitors> {
 
     let tallys: CurrentWinnerResponse = winner.json()?;
 
-    let mut winner = (String::from("_votes"), 0);
+    let mut winner = Vote {
+        name: String::from(""),
+        count: 0,
+    };
 
     for tally in tallys.current_tally {
-        if tally.1 > winner.1 {
+        if tally.count > winner.count {
             winner = tally
         }
     }
 
-    Competitors::from_str(winner.0.strip_suffix("_votes").unwrap())
+    Competitors::from_str(winner.name.strip_suffix("_votes").unwrap())
 }
