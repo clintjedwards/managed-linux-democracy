@@ -292,7 +292,7 @@ struct Vote(String, u32);
 
 #[derive(Debug, Deserialize)]
 struct CurrentWinnerResponse {
-    current_tally: Vec<Vote>,
+    votes: Vec<Vote>,
 }
 
 fn get_current_winner() -> Result<Competitors> {
@@ -303,25 +303,15 @@ fn get_current_winner() -> Result<Competitors> {
         .header("User-Agent", "scheduler")
         .send()?;
 
-    // Read the response body as a string
-    let raw_json = winner.text()?;
+    let tallys: CurrentWinnerResponse = winner.json()?;
 
-    // Print the raw JSON for inspection
-    dbg!(&raw_json);
+    let mut winner = Vote(String::from(""), 0);
 
-    bail!("lol");
+    for tally in tallys.votes {
+        if tally.1 > winner.1 {
+            winner = tally
+        }
+    }
 
-    // let tallys: CurrentWinnerResponse = winner.json()?;
-
-    // dbg!(&tallys);
-
-    // let mut winner = Vote(String::from(""), 0);
-
-    // for tally in tallys.current_tally {
-    //     if tally.1 > winner.1 {
-    //         winner = tally
-    //     }
-    // }
-
-    // Competitors::from_str(winner.0.strip_suffix("_votes").unwrap())
+    Competitors::from_str(&winner.0)
 }
