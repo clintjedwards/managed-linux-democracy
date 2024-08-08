@@ -303,17 +303,23 @@ fn get_current_winner() -> Result<Competitors> {
         .header("User-Agent", "scheduler")
         .send()?;
 
-    let tallys: CurrentWinnerResponse = winner.json()?;
+    // Read the response body as a string
+    let raw_json = winner.text()?;
 
-    dbg!(&tallys);
+    // Print the raw JSON for inspection
+    dbg!(&raw_json);
 
-    let mut winner = Vote(String::from(""), 0);
+    // let tallys: CurrentWinnerResponse = winner.json()?;
 
-    for tally in tallys.current_tally {
-        if tally.1 > winner.1 {
-            winner = tally
-        }
-    }
+    // dbg!(&tallys);
 
-    Competitors::from_str(winner.0.strip_suffix("_votes").unwrap())
+    // let mut winner = Vote(String::from(""), 0);
+
+    // for tally in tallys.current_tally {
+    //     if tally.1 > winner.1 {
+    //         winner = tally
+    //     }
+    // }
+
+    // Competitors::from_str(winner.0.strip_suffix("_votes").unwrap())
 }
