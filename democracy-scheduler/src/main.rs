@@ -289,18 +289,26 @@ fn launch_process(bin_name: &str, name: &str) -> u32 {
 
 #[derive(Debug, Deserialize)]
 struct CurrentWinnerResponse {
-    winner: String,
+    current_tally: Vec<(String, u32)>,
 }
 
 fn get_current_winner() -> Result<Competitors> {
-    let url = "http://localhost:8080/api/current_winner";
+    let url = "http://localhost:8080/api/votes";
 
     let winner = reqwest::blocking::Client::new()
         .get(url)
         .header("User-Agent", "scheduler")
         .send()?;
 
-    let winner: CurrentWinnerResponse = winner.json()?;
+    let tallys: CurrentWinnerResponse = winner.json()?;
 
-    Competitors::from_str(&winner.winner)
+    let mut winner = (String::from("_votes"), 0);
+
+    for tally in tallys.current_tally {
+        if tally.1 > winner.1 {
+            winner = tally
+        }
+    }
+
+    Competitors::from_str(winner.0.strip_suffix("_votes").unwrap())
 }
