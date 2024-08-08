@@ -309,6 +309,8 @@ fn get_current_winner() -> Result<Competitors> {
     // Print the raw JSON for inspection
     dbg!(&raw_json);
 
+    bail!("lol");
+
     // let tallys: CurrentWinnerResponse = winner.json()?;
 
     // dbg!(&tallys);
