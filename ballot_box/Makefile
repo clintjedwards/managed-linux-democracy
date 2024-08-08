@@ -45,7 +45,7 @@ run-tailwind:
 > npx tailwindcss -i ./src/main.css -o ./public/css/main.css --watch >/dev/null 2>&1
 
 run-backend:
-> cargo run -- start-web-service
+> cargo run
 
 deploy:
 > scp /tmp/astra_web ubuntu@astra.orreri.dev:/tmp/astra_web
