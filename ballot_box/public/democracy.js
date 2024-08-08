@@ -1,27 +1,6 @@
-async function updateCurlCommand() {
-  try {
-    const response = await fetch("http://localhost:8080/api/system");
-    if (!response.ok) {
-      throw new Error("Network response was not ok " + response.statusText);
-    }
-    const data = await response.json();
-    const address = data.address;
-
-    const curlCommandElement = document.getElementById("curl-command");
-    const currentCommand = curlCommandElement.textContent;
-    const updatedCommand = currentCommand.replace("localhost", address);
-
-    curlCommandElement.textContent = updatedCommand;
-  } catch (error) {
-    console.error("There has been a problem with your fetch operation:", error);
-  }
-}
-
-updateCurlCommand();
-
 async function updateVotes() {
   try {
-    const response = await fetch("http://localhost:8080/api/votes");
+    const response = await fetch("http://10.100.7.120:8080/api/votes");
     if (!response.ok) {
       throw new Error("Network response was not ok " + response.statusText);
     }
